@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pip install:*)",
+      "Bash(pytest:*)",
+      "Bash(python:*)",
+      "Bash(python3:*)",
+      "Bash(ls:*)",
+      "Bash(chmod:*)",
+      "Bash(pip3:*)",
+      "Bash(QT_DEBUG_PLUGINS=1 python3:*)",
+      "Bash(export:*)",
+      "Bash(test:*)",
+      "Bash(sqlite3:*)",
+      "mcp__web-search-prime__webSearchPrime",
+      "Bash(pkill:*)"
+    ]
+  }
+}
