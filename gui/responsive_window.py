@@ -13,6 +13,7 @@ from core.task_manager import TaskManager
 from core.pomodoro_timer import PomodoroTimer
 from core.statistics import Statistics
 from utils.logger import Logger
+from config import Config
 from gui.styles import Colors, Spacing
 from gui.optimized_timer_panel import OptimizedTimerPanel
 from gui.optimized_quadrants_view import OptimizedQuadrantsView
@@ -36,7 +37,10 @@ class ResponsiveWindow(QMainWindow):
         # 初始化数据层
         self.storage = Storage()
         self.task_manager = TaskManager(self.storage)
-        self.timer = PomodoroTimer()
+
+        # 从配置获取番茄钟时长
+        timer_duration = Config.get_timer_duration()
+        self.timer = PomodoroTimer(duration_seconds=timer_duration)
         self.statistics = Statistics(self.storage)
         self.logger = Logger(self.storage)
 
@@ -146,8 +150,9 @@ class ResponsiveWindow(QMainWindow):
         right_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
 
         self.history_view = ResponsiveHistoryView(self.statistics, self.logger, self.storage)
-        # 设置最小宽度，给历史记录更多空间
+        # 设置固定宽度，不允许动态调整（解决滚动截断问题）
         self.history_view.setMinimumWidth(320)
+        self.history_view.setMaximumWidth(320)  # ✅ 固定最大宽度，防止拉伸
 
         right_scroll.setWidget(self.history_view)
         self.main_splitter.addWidget(right_scroll)
@@ -160,6 +165,13 @@ class ResponsiveWindow(QMainWindow):
 
         # 设置最小尺寸 (280:500:320)
         self.main_splitter.setSizes([280, 500, 320])  # 初始宽度分配
+
+        # ✅ 关键修复：禁用右侧栏的可调整大小功能
+        # 这样可以避免动态调整导致的内容高度计算问题
+        self.main_splitter.setCollapsible(2, False)  # 禁用右侧栏折叠
+        # 锁定分割器位置，防止动态调整
+        self.main_splitter.handle(1).setEnabled(False)  # 禁用中央和右侧之间的分割线
+        # self.main_splitter.handle(2).setEnabled(False)  # 可选：完全禁用所有分割线
 
         main_layout.addWidget(self.main_splitter)
 
@@ -320,8 +332,13 @@ class ResponsiveWindow(QMainWindow):
 
     def on_timer_complete(self):
         """计时器完成"""
+        # 先执行计时器面板的完成逻辑（结束会话、累计番茄钟）
+        self.timer_panel.on_timer_complete()
+
+        # 再更新界面
         self.update_dashboard()
         self.history_view.refresh()
+        self.quadrants_view.refresh()
 
         # 显示通知
         self.show_notification("番茄钟完成", "恭喜！你完成了一个番茄钟。")
@@ -331,6 +348,10 @@ class ResponsiveWindow(QMainWindow):
         self.quadrants_view.refresh()
         self.update_dashboard()
         self.timer_panel.refresh_task_list()
+        # 刷新历史记录（包括"已完成任务"和"日期详情"）
+        self.history_view.refresh()
+        # 如果当前显示今天，刷新详情面板
+        self.history_view.refresh_today_if_needed()
 
     def on_task_selected(self, task_id: int):
         """任务选择"""
@@ -339,6 +360,8 @@ class ResponsiveWindow(QMainWindow):
     def on_log_added(self):
         """日志添加"""
         self.history_view.refresh()
+        # 如果历史视图当前显示的是今天，强制刷新详情面板
+        self.history_view.refresh_today_if_needed()
 
     def update_dashboard(self):
         """更新Dashboard"""
@@ -367,7 +390,22 @@ class ResponsiveWindow(QMainWindow):
         )
 
         if reply == QMessageBox.StandardButton.Yes:
+            # 结束当前会话（如果有）
+            if self.timer_panel.current_session_id is not None:
+                from datetime import datetime
+                from data.storage import TimerStatus
+                end_time = datetime.now().isoformat()
+                self.task_manager.storage.end_pomodoro_session(
+                    self.timer_panel.current_session_id,
+                    end_time,
+                    TimerStatus.ABANDONED
+                )
+                self.timer_panel.current_session_id = None
+                self.timer_panel.current_session_start_time = None
+
             self.timer.stop(abandon=True)
+            # 重置计时器，显示完整的番茄钟时长
+            self.timer.reset()
             self.timer_panel.refresh()
 
     def refresh_all(self):

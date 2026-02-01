@@ -5,6 +5,12 @@ import threading
 from enum import Enum
 from typing import Optional, Callable
 from datetime import datetime
+from PyQt6.QtCore import QObject, pyqtSignal
+
+
+class PomodoroTimerSignals(QObject):
+    """计时器信号"""
+    completed = pyqtSignal()  # 完成信号
 
 
 class TimerState(Enum):
@@ -21,21 +27,35 @@ class PomodoroTimer:
 
     DEFAULT_DURATION = 30 * 60  # 默认30分钟（秒）
 
-    def __init__(self):
-        """初始化计时器"""
+    def __init__(self, duration_seconds: int = None):
+        """
+        初始化计时器
+
+        Args:
+            duration_seconds: 计时时长（秒），None则使用默认30分钟
+        """
         self._state = TimerState.READY
-        self._duration = self.DEFAULT_DURATION
-        self._remaining_seconds = self.DEFAULT_DURATION
+        self._duration = duration_seconds if duration_seconds is not None else self.DEFAULT_DURATION
+        self._remaining_seconds = self._duration
         self._current_task_id: Optional[int] = None
         self._start_time: Optional[str] = None
         self._timer_thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
         self._pause_event = threading.Event()
 
+        # 信号对象（用于线程安全的回调）
+        self._signals = PomodoroTimerSignals()
+        self._signals.completed.connect(self._on_completed_signal)
+
         # 回调函数
         self._on_tick: Optional[Callable[[int, int], None]] = None  # (剩余秒数, 总秒数)
         self._on_complete: Optional[Callable[[], None]] = None
         self._on_state_change: Optional[Callable[[TimerState], None]] = None
+
+    def _on_completed_signal(self):
+        """完成信号的槽函数（在主线程中执行）"""
+        if self._on_complete:
+            self._on_complete()
 
     @property
     def state(self) -> TimerState:
@@ -133,7 +153,7 @@ class PomodoroTimer:
         if self._state == TimerState.PAUSED:
             # 从暂停恢复
             self._set_state(TimerState.RUNNING)
-            self._pause_event.clear()
+            self._pause_event.clear()  # 清除暂停标志，让线程继续
             return True
 
         # 新的计时
@@ -164,7 +184,7 @@ class PomodoroTimer:
             return False
 
         self._set_state(TimerState.PAUSED)
-        self._pause_event.set()
+        self._pause_event.set()  # 设置暂停标志，让线程进入等待
         return True
 
     def resume(self) -> bool:
@@ -264,21 +284,25 @@ class PomodoroTimer:
 
     def _run_timer(self):
         """计时器线程执行函数"""
+        iteration = 0
         while not self._stop_event.is_set():
+            iteration += 1
+
             # 检查暂停
             if self._pause_event.is_set():
-                self._pause_event.wait()
+                self._pause_event.wait()  # 阻塞直到恢复
                 continue
 
-            if self._remaining_seconds <= 0:
-                # 计时完成
-                break
-
-            # 触发tick回调
+            # 触发tick回调（包括0秒的情况）
             if self._on_tick:
                 self._on_tick(self._remaining_seconds, self._duration)
 
-            # 等待1秒
+            # 检查是否完成
+            if self._remaining_seconds <= 0:
+                # 计时完成，退出循环
+                break
+
+            # 等待1秒（或被stop_event中断）
             self._stop_event.wait(1.0)
             self._remaining_seconds -= 1
 
@@ -287,11 +311,8 @@ class PomodoroTimer:
             self._remaining_seconds = 0
             self._set_state(TimerState.COMPLETED)
 
-            if self._on_tick:
-                self._on_tick(0, self._duration)
-
-            if self._on_complete:
-                self._on_complete()
+            # 使用信号机制触发完成回调（线程安全）
+            self._signals.completed.emit()
 
     def _set_state(self, new_state: TimerState):
         """

@@ -111,6 +111,12 @@ class CompletedTasksPanel(QFrame):
         main_layout.addLayout(header_layout)
 
         # 任务列表区域
+        # 创建一个容器 widget 来包裹 scroll area
+        tasks_scroll_container = QWidget()
+        tasks_scroll_layout = QVBoxLayout(tasks_scroll_container)
+        tasks_scroll_layout.setContentsMargins(0, 0, 0, 0)
+        tasks_scroll_layout.setSpacing(0)
+
         self.tasks_scroll = QScrollArea()
         self.tasks_scroll.setWidgetResizable(True)
         self.tasks_scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
@@ -131,63 +137,186 @@ class CompletedTasksPanel(QFrame):
             }}
         """)
         self.tasks_list_widget.setWordWrap(True)
-        self.tasks_list_widget.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self.tasks_list_widget.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
         self.tasks_scroll.setWidget(self.tasks_list_widget)
 
-        main_layout.addWidget(self.tasks_scroll)
+        tasks_scroll_layout.addWidget(self.tasks_scroll)
+
+        # 在 scroll area 外层添加底部间距
+        tasks_scroll_layout.addSpacing(Spacing.LG)  # 24px 底部留白
+
+        main_layout.addWidget(tasks_scroll_container)
 
     def refresh(self):
-        """刷新已完成任务列表"""
+        """刷新已完成任务列表 - 按日期分组显示"""
         completed_tasks = self.storage.get_completed_tasks()
 
         if not completed_tasks:
             self.tasks_list_widget.setText("暂无已完成的任务")
-            self.tasks_list_widget.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; padding: {Spacing.SM}px;")
+            self.tasks_list_widget.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; padding: {Spacing.MD}px;")
             return
 
-        # 构建HTML显示
+        # 按完成日期分组
+        from collections import defaultdict
+        tasks_by_date = defaultdict(list)
+        for task in completed_tasks:
+            completed_date = task.get('completed_date')
+            if completed_date:
+                # 只取日期部分（YYYY-MM-DD）
+                date_only = completed_date.split('T')[0] if 'T' in completed_date else completed_date
+                tasks_by_date[date_only].append(task)
+
+        # 按日期排序（最新的在前）
+        sorted_dates = sorted(tasks_by_date.keys(), reverse=True)
+
         quadrant_names = ["重要紧急", "重要不紧急", "紧急不重要", "不紧急不重要"]
         quadrant_colors = [Colors.QUADRANT_0, Colors.QUADRANT_1, Colors.QUADRANT_2, Colors.QUADRANT_3]
 
-        html = f"<div style='font-size: 13px;'>"
+        # 构建HTML：日期分组 + 任务卡片
+        html = "<div style='display: flex; flex-direction: column; gap: 16px;'>"
 
-        for task in completed_tasks:
-            quadrant_name = quadrant_names[task['quadrant']]
-            quadrant_color = quadrant_colors[task['quadrant']]
+        for date_str in sorted_dates:
+            tasks = tasks_by_date[date_str]
 
-            # 计算持续时间（从创建到完成的天数）
-            created_date = datetime.fromisoformat(task['created_date'])
-            completed_date = datetime.fromisoformat(task['completed_date']) if task['completed_date'] else datetime.now()
-            duration_days = (completed_date - created_date).days + 1
+            # 解析日期
+            date_obj = datetime.strptime(date_str, "%Y-%m-%d")
+            weekday = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"][date_obj.weekday()]
 
-            # 格式化日期
-            completed_str = completed_date.strftime("%Y-%m-%d") if task['completed_date'] else "未完成"
+            # 计算当日总番茄钟数
+            daily_total = sum(task['actual_pomodoros'] for task in tasks)
 
+            # 日期标题 - 使用清晰的蓝色背景
             html += f"""
-            <div style='padding: {Spacing.MD}px; margin-bottom: {Spacing.SM}px;
-                 background-color: {Colors.BG_HOVER}; border-radius: {Spacing.RADIUS_SMALL}px;
-                 border-left: 3px solid {quadrant_color};'>
-                <div style='display: flex; justify-content: space-between; align-items: center;'>
-                    <span style='color: {quadrant_color}; font-weight: 600; font-size: 12px;'>[{quadrant_name}]</span>
-                    <span style='color: {Colors.TEXT_TERTIARY}; font-size: 12px;'>{completed_str}</span>
-                </div>
-                <div style='color: {Colors.TEXT_PRIMARY}; margin-top: {Spacing.XS}px; font-weight: 500;'>
-                    {task['description']}
-                </div>
-                <div style='margin-top: {Spacing.SM}px; display: flex; gap: {Spacing.MD}px;'>
-                    <span style='color: {Colors.PRIMARY}; font-size: 12px;'>
-                        🍅 {task['actual_pomodoros']} 个番茄钟
+            <div style='margin-bottom: 4px;'>
+                <div style='
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: center;
+                    padding: 10px 14px;
+                    background-color: {Colors.PRIMARY};
+                    border-radius: 8px;
+                    margin-bottom: 8px;
+                '>
+                    <span style='color: white; font-size: 14px; font-weight: 600;'>
+                        {date_obj.strftime('%Y年%m月%d日')} {weekday}
                     </span>
-                    <span style='color: {Colors.TEXT_SECONDARY}; font-size: 12px;'>
-                        ⏱️ 持续 {duration_days} 天
+                    <span style='color: white; font-size: 14px; font-weight: 600;'>
+                        {daily_total} 🍅
                     </span>
                 </div>
-            </div>
             """
 
+            # 任务列表
+            html += "<div style='display: flex; flex-direction: column; gap: 10px;'>"
+
+            for task in tasks:
+                quadrant_name = quadrant_names[task['quadrant']]
+                quadrant_color = quadrant_colors[task['quadrant']]
+
+                # 计算各种时间信息
+                created_date = datetime.fromisoformat(task['created_date'])
+                completed_date = datetime.fromisoformat(task['completed_date']) if task['completed_date'] else datetime.now()
+
+                # 创建时间
+                created_str = created_date.strftime("%m-%d %H:%M")
+
+                # 完成时间 - 尝试从会话中获取精确时间
+                completed_time = ""
+                if task['completed_date']:
+                    sessions = self.storage.get_pomodoro_sessions_by_task(task['id'])
+                    if sessions:
+                        last_session = None
+                        for session in sessions:
+                            if session['status'] == 'completed':
+                                if not last_session or session['end_time'] > last_session['end_time']:
+                                    last_session = session
+                        if last_session and last_session['end_time']:
+                            try:
+                                time_obj = datetime.fromisoformat(last_session['end_time'])
+                                completed_time = time_obj.strftime("%m-%d %H:%M")
+                            except:
+                                completed_time = completed_date.strftime("%m-%d") + " --:--"
+                    else:
+                        completed_time = completed_date.strftime("%m-%d") + " --:--"
+
+                # 消耗时间（天数）
+                duration_days = max(1, (completed_date - created_date).days + 1)
+                duration_str = f"{duration_days}天"
+
+                # 预期和实际番茄钟数
+                estimated = task['estimated_pomodoros']
+                actual = task['actual_pomodoros']
+
+                html += f"""
+                <div style='
+                    background-color: #FFFFFF;
+                    border-radius: 8px;
+                    padding: 12px 14px;
+                    border-left: 4px solid {quadrant_color};
+                    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+                '>
+                    <!-- 第一行：象限标签 + 任务名称 -->
+                    <div style='display: flex; align-items: center; gap: 10px; margin-bottom: 10px;'>
+                        <div style='
+                            background-color: {quadrant_color};
+                            color: #FFFFFF;
+                            padding: 3px 8px;
+                            border-radius: 4px;
+                            font-size: 11px;
+                            font-weight: 600;
+                            white-space: nowrap;
+                            flex-shrink: 0;
+                        '>
+                            {quadrant_name}
+                        </div>
+                        <div style='
+                            color: {Colors.TEXT_PRIMARY};
+                            font-size: 14px;
+                            font-weight: 500;
+                            flex: 1;
+                        '>
+                            {task['description']}
+                        </div>
+                    </div>
+
+                    <!-- 第二行：所有时间信息在一行 -->
+                    <div style='display: flex; align-items: center; gap: 16px; padding-left: 4px;'>
+                        <div style='display: flex; align-items: center; gap: 4px;'>
+                            <span style='color: {Colors.TEXT_TERTIARY}; font-size: 12px; white-space: nowrap;'>创建:</span>
+                            <span style='color: {Colors.TEXT_SECONDARY}; font-size: 12px; font-weight: 500;'>{created_str}</span>
+                        </div>
+                        <div style='display: flex; align-items: center; gap: 4px;'>
+                            <span style='color: {Colors.TEXT_TERTIARY}; font-size: 12px; white-space: nowrap;'>完成:</span>
+                            <span style='color: {Colors.TEXT_SECONDARY}; font-size: 12px; font-weight: 500;'>{completed_time}</span>
+                        </div>
+                        <div style='display: flex; align-items: center; gap: 4px;'>
+                            <span style='color: {Colors.TEXT_TERTIARY}; font-size: 12px; white-space: nowrap;'>耗时:</span>
+                            <span style='color: {Colors.TEXT_SECONDARY}; font-size: 12px; font-weight: 500;'>{duration_str}</span>
+                        </div>
+                        <div style='display: flex; align-items: center; gap: 4px;'>
+                            <span style='color: {Colors.TEXT_TERTIARY}; font-size: 12px; white-space: nowrap;'>预期:</span>
+                            <span style='color: {Colors.TEXT_SECONDARY}; font-size: 12px; font-weight: 500;'>{estimated}🍅</span>
+                        </div>
+                        <div style='display: flex; align-items: center; gap: 4px;'>
+                            <span style='color: {Colors.TEXT_TERTIARY}; font-size: 12px; white-space: nowrap;'>实际:</span>
+                            <span style='color: {Colors.PRIMARY}; font-size: 13px; font-weight: 600;'>{actual}🍅</span>
+                        </div>
+                    </div>
+                </div>
+                """
+
+            html += "</div></div>"
+
         html += "</div>"
+
         self.tasks_list_widget.setText(html)
-        self.tasks_list_widget.setStyleSheet("")
+        self.tasks_list_widget.setStyleSheet(f"""
+            QLabel {{
+                background-color: transparent;
+                padding: {Spacing.SM}px;
+                padding-bottom: 40px;
+            }}
+        """)
 
 
 
@@ -280,18 +409,24 @@ class DateDetailPanel(QFrame):
         task_container.setLayout(task_section)
         splitter.addWidget(task_container)
 
-        # 日志区域
+        # 日志区域 - 任务完成卡片流
         log_section = QVBoxLayout()
-        log_section.setSpacing(Spacing.SM)
+        log_section.setSpacing(Spacing.MD)
 
-        log_title = QLabel("日志记录")
+        log_title = QLabel("完成记录")
         log_title.setFont(Fonts.body())
         log_title.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-weight: 600;")
         log_section.addWidget(log_title)
 
+        # 创建一个容器 widget 来包裹 scroll area
+        log_scroll_container = QWidget()
+        log_scroll_layout = QVBoxLayout(log_scroll_container)
+        log_scroll_layout.setContentsMargins(0, 0, 0, 0)
+        log_scroll_layout.setSpacing(0)
+
         self.log_scroll = QScrollArea()
         self.log_scroll.setWidgetResizable(True)
-        self.log_scroll.setMinimumHeight(100)
+        self.log_scroll.setMinimumHeight(150)
         self.log_scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.log_scroll.setStyleSheet(f"""
             QScrollArea {{
@@ -300,47 +435,57 @@ class DateDetailPanel(QFrame):
             }}
         """)
 
-        self.log_list_widget = QLabel("暂无日志")
+        self.log_list_widget = QLabel("暂无完成记录")
         self.log_list_widget.setFont(Fonts.body())
         self.log_list_widget.setStyleSheet(f"""
             QLabel {{
                 color: {Colors.TEXT_SECONDARY};
                 background-color: transparent;
                 padding: {Spacing.SM}px;
+                padding-bottom: 40px;
             }}
         """)
         self.log_list_widget.setWordWrap(True)
-        self.log_list_widget.setAlignment(Qt.AlignmentFlag.AlignTop)
+        # 移除 AlignTop 和 AlignLeft，让 QLabel 自然扩展
         self.log_scroll.setWidget(self.log_list_widget)
 
-        log_section.addWidget(self.log_scroll)
+        log_scroll_layout.addWidget(self.log_scroll)
+
+        # 在 scroll area 外层添加底部间距
+        log_scroll_layout.addSpacing(Spacing.LG)  # 24px 底部留白
+
+        log_section.addWidget(log_scroll_container)
         log_container = QWidget()
         log_container.setLayout(log_section)
         splitter.addWidget(log_container)
 
         # 心得感悟区域
         reflection_section = QVBoxLayout()
-        reflection_section.setSpacing(Spacing.SM)
+        reflection_section.setSpacing(Spacing.MD)
 
-        reflection_title = QLabel("心得感悟")
+        reflection_title = QLabel("今日心得")
         reflection_title.setFont(Fonts.body())
         reflection_title.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-weight: 600;")
         reflection_section.addWidget(reflection_title)
 
         self.reflection_input = QTextEdit()
-        self.reflection_input.setPlaceholderText("记录今天的心得和感悟...")
-        self.reflection_input.setMinimumHeight(80)
+        self.reflection_input.setPlaceholderText("今天有什么收获和感悟...")
+        self.reflection_input.setMinimumHeight(80)  # ✅ 降低最小高度
+        self.reflection_input.setMaximumHeight(120)  # ✅ 限制最大高度，避免占据太多空间
+        self.reflection_input.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)  # ✅ 固定高度策略
         self.reflection_input.setStyleSheet(f"""
             QTextEdit {{
-                background-color: {Colors.BG_GLOBAL};
+                background-color: {Colors.BG_CARD};
                 border: 1px solid {Colors.BORDER};
-                border-radius: {Spacing.RADIUS_SMALL}px;
-                padding: {Spacing.SM}px;
+                border-radius: {Spacing.RADIUS_CARD}px;
+                padding: {Spacing.MD}px;
                 font-size: 13px;
+                line-height: 1.6;
                 color: {Colors.TEXT_PRIMARY};
             }}
             QTextEdit:focus {{
                 border-color: {Colors.PRIMARY};
+                background-color: {Colors.BG_GLOBAL};
             }}
         """)
         reflection_section.addWidget(self.reflection_input)
@@ -373,15 +518,22 @@ class DateDetailPanel(QFrame):
         reflection_container.setLayout(reflection_section)
         splitter.addWidget(reflection_container)
 
-        # 设置初始比例（任务:日志:心得 = 4:3:3）
-        splitter.setStretchFactor(0, 4)
-        splitter.setStretchFactor(1, 3)
-        splitter.setStretchFactor(2, 3)
+        # ✅ 调整比例：任务:日志:心得 = 2:7:0
+        # 心得区域设为 0 表示使用固定大小（由 setMinimumHeight/MaximumHeight 决定）
+        # 这样"完成记录"可以获得更多滚动空间
+        splitter.setStretchFactor(0, 2)  # 完成的任务：约占 22%
+        splitter.setStretchFactor(1, 7)  # 完成记录：约占 78%
+        splitter.setStretchFactor(2, 0)  # 今日心得：固定大小（不参与伸缩）
+
+        # ✅ 关键修复：禁用垂直分割线的调整功能，防止心得区域被压缩
+        splitter.handle(0).setEnabled(False)  # 禁用任务和日志之间的分割线
+        splitter.handle(1).setEnabled(False)  # 禁用日志和心得之间的分割线
 
         main_layout.addWidget(splitter)
 
     def update_detail(self, stats: DailyStatistics, date_str: str):
         """更新详情"""
+
         # 保存当前日期
         self.current_date = date_str
 
@@ -418,24 +570,109 @@ class DateDetailPanel(QFrame):
             self.task_list_widget.setText("当日无完成任务")
             self.task_list_widget.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; padding: {Spacing.SM}px;")
 
-        # 更新日志列表
+        # 更新日志列表 - 任务完成卡片流
         if stats.logs:
-            log_html = f"<div style='font-size: 13px;'>"
+            # 卡片流样式：每个完成记录是一个独立的卡片
+            log_html = f"<div style='display: flex; flex-direction: column; gap: 12px; padding-bottom: 32px;'>"
+
             for log in stats.logs:
-                timestamp = log['timestamp'][:16]
-                log_html += f"""
-                <div style='padding: {Spacing.SM}px; margin-bottom: {Spacing.SM}px;
-                     background-color: {Colors.BG_HOVER}; border-radius: {Spacing.RADIUS_SMALL}px;'>
-                    <span style='color: {Colors.TEXT_TERTIARY}; font-size: 12px;'>{timestamp}</span>
-                    <span style='color: {Colors.TEXT_PRIMARY};'> {log['content']}</span>
-                </div>
-                """
+                timestamp = log['timestamp'][11:16]  # 只取 HH:MM
+                content = log['content']
+
+                # 解析日志内容，提取关键信息
+                # 格式: "✅ 完成番茄钟 - [象限] 任务名称 (开始时间: HH:MM)"
+                is_completion = "完成番茄钟" in content
+
+                if is_completion:
+                    # 任务完成卡片
+                    log_html += f"""
+                    <div style='
+                        background: linear-gradient(135deg, {Colors.BG_CARD} 0%, rgba(82, 196, 26, 0.08) 100%);
+                        border-radius: 12px;
+                        padding: 14px 16px;
+                        border-left: 3px solid {Colors.SUCCESS};
+                        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+                    '>
+                        <div style='display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;'>
+                            <span style='color: {Colors.TEXT_TERTIARY}; font-size: 12px; font-weight: 500;'>{timestamp}</span>
+                            <span style='color: {Colors.SUCCESS}; font-size: 16px;'>✅</span>
+                        </div>
+                        <div style='color: {Colors.TEXT_PRIMARY}; font-size: 14px; line-height: 1.5;'>
+                            {self._format_log_content(content)}
+                        </div>
+                    </div>
+                    """
+                else:
+                    # 普通日志卡片
+                    log_html += f"""
+                    <div style='
+                        background-color: {Colors.BG_CARD};
+                        border-radius: 12px;
+                        padding: 12px 16px;
+                        border-left: 3px solid {Colors.TEXT_TERTIARY};
+                    '>
+                        <div style='display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;'>
+                            <span style='color: {Colors.TEXT_TERTIARY}; font-size: 12px; font-weight: 500;'>{timestamp}</span>
+                        </div>
+                        <div style='color: {Colors.TEXT_PRIMARY}; font-size: 13px; line-height: 1.5;'>
+                            {content}
+                        </div>
+                    </div>
+                    """
+
             log_html += "</div>"
             self.log_list_widget.setText(log_html)
-            self.log_list_widget.setStyleSheet("")
+            self.log_list_widget.setStyleSheet(f"""
+                QLabel {{
+                    background-color: transparent;
+                    padding: {Spacing.SM}px;
+                    padding-bottom: 40px;
+                }}
+            """)
         else:
-            self.log_list_widget.setText("当日无日志记录")
-            self.log_list_widget.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; padding: {Spacing.SM}px;")
+            self.log_list_widget.setText("暂无完成记录")
+            self.log_list_widget.setStyleSheet(f"color: {Colors.TEXT_TERTIARY}; padding: {Spacing.MD}px; font-size: 13px;")
+
+    def _format_log_content(self, content: str) -> str:
+        """
+        格式化日志内容，突出显示关键信息
+
+        Args:
+            content: 原始日志内容
+
+        Returns:
+            格式化后的HTML
+        """
+        # 提取象限标签和任务名称
+        # 格式: "✅ 完成番茄钟 - [重要紧急] 任务名称 (开始时间: HH:MM)"
+        import re
+
+        # 匹配象限标签
+        quadrant_match = re.search(r'\[([^\]]+)\]', content)
+        if quadrant_match:
+            quadrant_name = quadrant_match.group(1)
+            quadrant_colors = {
+                "重要紧急": Colors.QUADRANT_0,
+                "重要不紧急": Colors.QUADRANT_1,
+                "紧急不重要": Colors.QUADRANT_2,
+                "不紧急不重要": Colors.QUADRANT_3
+            }
+            quadrant_color = quadrant_colors.get(quadrant_name, Colors.TEXT_SECONDARY)
+
+            # 替换象限标签为带颜色的标签
+            content = re.sub(
+                r'\[([^\]]+)\]',
+                f"<span style='color: {quadrant_color}; font-weight: 600; font-size: 12px;'>[\\1]</span>",
+                content
+            )
+
+        # 移除时间戳部分（已经在顶部显示）
+        content = re.sub(r'\(开始时间:\s*\d{2}:\d{2}\)', '', content)
+
+        # 移除 "✅ 完成番茄钟 - " 前缀
+        content = content.replace("✅ 完成番茄钟 - ", "")
+
+        return content.strip()
 
         # 加载心得感悟（使用stats.reflection）
         if stats.reflection and stats.reflection.get('content'):
@@ -514,6 +751,9 @@ class ResponsiveHistoryView(QWidget):
         self.storage = storage
 
         self.init_ui()
+        # init_ui 中设置了日历为今天，会触发 on_date_selected
+        # 但需要确保所有组件都已创建，所以手动触发一次
+        self.on_date_selected()
         self.refresh()
 
     def init_ui(self):
@@ -599,6 +839,10 @@ class ResponsiveHistoryView(QWidget):
             bg_hover=Colors.BG_HOVER
         ))
         self.calendar.selectionChanged.connect(self.on_date_selected)
+
+        # 默认选中今天
+        self.calendar.setSelectedDate(QDate.currentDate())
+
         calendar_layout.addWidget(self.calendar)
 
         # 导航按钮
@@ -645,6 +889,33 @@ class ResponsiveHistoryView(QWidget):
         """刷新视图"""
         self.mark_calendar_dates()
         self.completed_panel.refresh()
+        # 刷新详情面板（如果当前有选中日期）
+        if self.detail_panel.current_date:
+            self.refresh_detail_panel(self.detail_panel.current_date)
+
+    def refresh_detail_panel(self, date_str: str):
+        """
+        刷新详情面板
+
+        Args:
+            date_str: 日期字符串 (YYYY-MM-DD)
+        """
+        daily_stats = self.statistics.get_daily_statistics(date_str)
+        self.detail_panel.update_detail(daily_stats, date_str)
+
+    def refresh_today_if_needed(self):
+        """如果当前显示的是今天，则刷新（用于新日志添加后）"""
+        today = datetime.now().strftime("%Y-%m-%d")
+        current = self.detail_panel.current_date
+
+        if current == today:
+            self.refresh_detail_panel(today)
+        elif current is None:
+            # 如果还没有选中任何日期，默认显示今天
+            self.calendar.setSelectedDate(QDate.currentDate())
+        else:
+            # 仍然重新标记日历，因为今天有了新的番茄钟
+            self.mark_calendar_dates()
 
     def mark_calendar_dates(self):
         """标记有番茄钟的日期 - 温和回顾风格"""
@@ -679,6 +950,10 @@ class ResponsiveHistoryView(QWidget):
 
     def on_date_selected(self):
         """日期选择变化"""
+        # 确保 detail_panel 已创建
+        if not hasattr(self, 'detail_panel') or self.detail_panel is None:
+            return
+
         selected_date = self.calendar.selectedDate()
         date_str = selected_date.toString("yyyy-MM-dd")
 

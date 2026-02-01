@@ -359,6 +359,25 @@ class Storage:
             self.conn.commit()
             return cursor.rowcount > 0
 
+    def get_pomodoro_session(self, session_id: int) -> Optional[Dict[str, Any]]:
+        """
+        获取指定番茄钟会话
+
+        Args:
+            session_id: 会话ID
+
+        Returns:
+            会话信息字典，不存在则返回None
+        """
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT * FROM pomodoro_sessions
+            WHERE id = ?
+        """, (session_id,))
+
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
     def get_pomodoro_sessions_by_date(self, date: str) -> List[Dict[str, Any]]:
         """
         获取指定日期的番茄钟会话

@@ -55,6 +55,7 @@ class OptimizedTimerPanel(QWidget):
         self.statistics = Statistics(self.storage)
 
         self.current_session_id: Optional[int] = None
+        self.current_session_start_time: Optional[str] = None  # 记录会话开始时间
 
         self.init_ui()
         self.connect_signals()
@@ -90,7 +91,7 @@ class OptimizedTimerPanel(QWidget):
         timer_layout.addWidget(self.current_task_label)
 
         # 计时器数字（绝对主视觉）
-        self.time_label = QLabel("30:00")
+        self.time_label = QLabel(self.timer.get_formatted_time())
         self.time_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.time_label.setFont(Fonts.timer_extra_bold(88))  # 增大10% + 超粗字重
         self.time_label.setStyleSheet(f"color: {Colors.TIMER_DISPLAY};")  # 深蓝近黑
@@ -112,7 +113,8 @@ class OptimizedTimerPanel(QWidget):
         self.start_btn.setFixedHeight(56)
         self.start_btn.setMinimumWidth(140)
         apply_primary_button_style(self.start_btn)  # 实心、品牌色 - 主按钮
-        self.start_btn.clicked.connect(self.start_pomodoro)
+        # 使用一个统一的槽函数处理开始/继续
+        self.start_btn.clicked.connect(self.on_start_or_resume_clicked)
         button_layout.addWidget(self.start_btn)
 
         self.pause_btn = QPushButton("暂停")
@@ -157,7 +159,7 @@ class OptimizedTimerPanel(QWidget):
         """连接信号和槽"""
         self.timer.set_tick_callback(self.on_timer_tick)
         self.timer.set_state_change_callback(self.on_timer_state_changed)
-        self.timer.set_complete_callback(self.on_timer_complete)
+        # 注意：complete_callback 由 ResponsiveWindow 统一管理，避免被覆盖
 
     def refresh(self):
         """刷新界面"""
@@ -238,7 +240,10 @@ class OptimizedTimerPanel(QWidget):
         self.status_label.setStyleSheet(f"color: {color}; font-weight: 500;")  # 减轻字重
 
     def on_timer_complete(self):
-        """计时器完成回调"""
+        """计时器完成回调 - 由 ResponsiveWindow 统一调用"""
+        completed_task_id = None
+        session_start_time = self.current_session_start_time
+
         if self.current_session_id is not None:
             end_time = datetime.now().isoformat()
             self.storage.end_pomodoro_session(
@@ -249,35 +254,102 @@ class OptimizedTimerPanel(QWidget):
 
             task_id = self.timer.current_task_id
             if task_id:
+                completed_task_id = task_id
                 self.task_manager.increment_task_pomodoros(task_id)
 
+        # 自动添加日志
+        if completed_task_id and session_start_time:
+            self._add_completion_log(completed_task_id, session_start_time)
+
         self.current_session_id = None
-        self.time_label.setText("30:00")
-        # 保持深色，不改变颜色
+        self.current_session_start_time = None
+
+        # 重置计时器为 READY 状态，方便立即开始下一个番茄钟
+        self.timer.reset()
+        self.time_label.setText(self.timer.get_formatted_time())
         self.update_ui_state()
 
+    def _add_completion_log(self, task_id: int, start_time: str):
+        """
+        添加番茄钟完成日志
+
+        Args:
+            task_id: 任务ID
+            start_time: 开始时间
+        """
+        try:
+            task = self.task_manager.get_task(task_id)
+            if not task:
+                return
+
+            # 获取任务类型（象限）
+            quadrant_name = TaskManager.get_quadrant_name(task.quadrant)
+
+            # 格式化开始时间
+            start_dt = datetime.fromisoformat(start_time)
+            start_time_str = start_dt.strftime("%H:%M")
+
+            # 构建日志内容
+            log_content = f"✅ 完成番茄钟 - [{quadrant_name}] {task.description} (开始时间: {start_time_str})"
+
+            self.logger.create_log(log_content, task_id=task_id)
+
+            # 发送信号通知主窗口刷新历史视图
+            self.log_added.emit()
+
+        except Exception as e:
+            pass  # 静默失败，不影响主流程
+
+    def on_start_or_resume_clicked(self):
+        """处理开始/继续按钮点击"""
+        state = self.timer.state
+
+        if state == TimerState.PAUSED:
+            # 从暂停恢复
+            self.resume_pomodoro()
+        else:
+            # 开始新的番茄钟
+            self.start_pomodoro()
+
     def start_pomodoro(self):
-        """开始番茄钟"""
+        """开始新的番茄钟"""
         try:
             start_time = datetime.now().isoformat()
             task_id = self.get_selected_task_id()
+
             session_id = self.storage.create_pomodoro_session(task_id, start_time)
 
             if self.timer.start():
                 self.current_session_id = session_id
+                self.current_session_start_time = start_time  # 保存开始时间
                 self.update_ui_state()
             else:
                 end_time = datetime.now().isoformat()
                 self.storage.end_pomodoro_session(session_id, end_time, TimerStatus.ABANDONED)
                 QMessageBox.warning(self, "警告", "计时器启动失败")
+                self.current_session_id = None
+                self.current_session_start_time = None
         except Exception as e:
             QMessageBox.critical(self, "错误", f"无法开始番茄钟: {str(e)}")
             self.current_session_id = None
+            self.current_session_start_time = None
+
+    def resume_pomodoro(self):
+        """恢复暂停的番茄钟"""
+        if self.current_session_id is None:
+            QMessageBox.warning(self, "警告", "没有可以恢复的番茄钟")
+            return
+
+        # 只恢复计时，不创建新会话
+        if self.timer.resume():
+            self.update_ui_state()
+        else:
+            QMessageBox.warning(self, "警告", "无法恢复番茄钟")
 
     def pause_pomodoro(self):
         """暂停番茄钟"""
-        self.timer.pause()
-        self.update_ui_state()
+        if self.timer.pause():
+            self.update_ui_state()
 
     def stop_pomodoro(self):
         """停止/废弃番茄钟"""
@@ -297,10 +369,12 @@ class OptimizedTimerPanel(QWidget):
                     TimerStatus.ABANDONED
                 )
                 self.current_session_id = None
+                self.current_session_start_time = None
 
             self.timer.stop(abandon=True)
-            self.time_label.setText("30:00")
-            # 保持深色，不改变颜色
+            # 重置计时器，显示完整的番茄钟时长
+            self.timer.reset()
+            self.time_label.setText(self.timer.get_formatted_time())
             self.update_ui_state()
 
     def force_complete_pomodoro(self):
@@ -324,8 +398,12 @@ class OptimizedTimerPanel(QWidget):
                 task_id = self.timer.current_task_id
                 if task_id:
                     self.task_manager.increment_task_pomodoros(task_id)
+                    # 也添加日志
+                    if self.current_session_start_time:
+                        self._add_completion_log(task_id, self.current_session_start_time)
 
                 self.current_session_id = None
+                self.current_session_start_time = None
 
             self.timer.force_complete()
 
