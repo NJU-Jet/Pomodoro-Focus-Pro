@@ -50,8 +50,8 @@
 
 ```bash
 # 克隆项目
-git clone <repository-url>
-cd 番茄钟_claude
+git clone https://github.com/NJU-Jet/Pomodoro-Focus-Pro.git
+cd Pomodoro-Focus-Pro
 
 # 创建虚拟环境
 python3 -m venv venv
