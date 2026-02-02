@@ -633,6 +633,12 @@ class DateDetailPanel(QFrame):
             self.log_list_widget.setText("暂无完成记录")
             self.log_list_widget.setStyleSheet(f"color: {Colors.TEXT_TERTIARY}; padding: {Spacing.MD}px; font-size: 13px;")
 
+        # 加载心得感悟
+        if stats.reflection and stats.reflection.get('content'):
+            self.reflection_input.setPlainText(stats.reflection['content'])
+        else:
+            self.reflection_input.clear()
+
     def _format_log_content(self, content: str) -> str:
         """
         格式化日志内容，突出显示关键信息
@@ -673,12 +679,6 @@ class DateDetailPanel(QFrame):
         content = content.replace("✅ 完成番茄钟 - ", "")
 
         return content.strip()
-
-        # 加载心得感悟（使用stats.reflection）
-        if stats.reflection and stats.reflection.get('content'):
-            self.reflection_input.setPlainText(stats.reflection['content'])
-        else:
-            self.reflection_input.clear()
 
     def save_reflection(self):
         """保存心得感悟"""
